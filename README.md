@@ -71,5 +71,40 @@ classification: ENDPOINT-INDEPENDENT MAPPING (EIM)
 If the script prints a `kernel rebound port` warning, `SO_REUSEPORT` was
 not honored (older Linux, Windows, sandboxed environments). The result
 is unreliable on that platform; rerun on a normal Linux/macOS host.
- 
 
+## NixOS
+
+This repository provides a Nix flake with a NixOS module for running the server.
+
+### Running directly with Nix
+
+```bash
+nix run github:0xb10c/tcp-nat-check
+nix run github:0xb10c/tcp-nat-check -- 8080 8081  # custom ports
+```
+
+### NixOS module
+
+Add the flake to your NixOS configuration inputs and import the module:
+
+```nix
+{
+  inputs.tcp-nat-check.url = "github:0xb10c/tcp-nat-check";
+
+  outputs = { self, nixpkgs, tcp-nat-check, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        tcp-nat-check.nixosModules.default
+        {
+          services.nat-check-server = {
+            enable = true;
+            # portA = 7770;       # default
+            # portB = 7771;       # default
+            # openFirewall = true; # open both ports in the firewall
+          };
+        }
+      ];
+    };
+  };
+}
+```
