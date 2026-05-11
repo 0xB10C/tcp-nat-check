@@ -234,13 +234,13 @@ def main(argv):
         same_per_ip = all(len(set(ps)) == 1 for ps in by_dst_ip.values())
         if same_per_ip and len(by_dst_ip) >= 2:
             label = "ADDRESS-DEPENDENT MAPPING (ADM)"
-            color = YELLOW
+            color = RED
             detail = (
                 "Same external port for all destinations sharing a destination IP, "
-                "but a different external port per destination IP. Hole punching may "
-                "still work in the simple two-peer case — the port a peer needs is the "
-                "one your NAT used the first time you contacted that peer's IP — but "
-                "this is less robust than EIM."
+                "but a different external port per destination IP. TCP hole punching "
+                "will not work: a coordinator only knows the external port your NAT "
+                "assigned for the coordinator's IP, but your NAT will assign a "
+                "different, unpredictable port when you connect to a new peer IP."
             )
         else:
             label = "ADDRESS+PORT-DEPENDENT MAPPING (APDM, 'symmetric')"

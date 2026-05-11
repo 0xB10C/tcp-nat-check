@@ -58,13 +58,13 @@ classification: ENDPOINT-INDEPENDENT MAPPING (EIM)
 - **EIM** (endpoint-independent) — same external port everywhere → hole
   punching has a strong chance of working.
 - **ADM** (address-dependent) — same per destination IP, different
-  across IPs → the simple two-peer hole punch may still work (the port a
-  peer needs is the one your NAT used the first time you contacted that
-  peer's IP); less robust than EIM.
+  across IPs → hole punching fails. The coordinator only knows the
+  external port your NAT assigned for the coordinator's IP, but your NAT
+  will assign a different, unpredictable port when you connect to a new
+  peer IP.
 - **APDM** (address+port-dependent, "symmetric") — varies per
-  `(dst_ip, dst_port)` → coordinator cannot predict your external port
-  for any given peer; hole punching fails. Typical of CGNAT, mobile
-  carriers, and restrictive enterprise networks.
+  `(dst_ip, dst_port)` → hole punching fails for the same reason as ADM.
+  Typical of CGNAT, mobile carriers, and restrictive enterprise networks.
 - **no NAT** — external address equals local address → hole punching
   unnecessary; just listen normally.
 
