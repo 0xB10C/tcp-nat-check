@@ -25,6 +25,8 @@ Example:
         http://hostb.example.com:7771
 
 IP addresses are masked by default. Set NAT_CHECK_SHOW_IPS=1 to reveal them.
+
+Checks IPv4 by default, and also checks IPv6 if all targets have AAAA records.
 """
 
 import json
@@ -60,14 +62,18 @@ def _mask_ip(ip):
         _mask_ip._counter = 0
     if ip not in _mask_ip._cache:
         _mask_ip._counter += 1
-        _mask_ip._cache[ip] = f"x.x.x.{_mask_ip._counter}"
+        n = _mask_ip._counter
+        if ":" in ip:
+            _mask_ip._cache[ip] = f"x::x:{n}"
+        else:
+            _mask_ip._cache[ip] = f"x.x.x.{n}"
     return _mask_ip._cache[ip]
 
 
 # --- socket plumbing --------------------------------------------------
 
-def make_socket():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def make_socket(family):
+    s = socket.socket(family, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if hasattr(socket, "SO_REUSEPORT"):
         try:
@@ -78,12 +84,13 @@ def make_socket():
     return s
 
 
-def open_connection(local_port, host, port):
-    """Bind to (0.0.0.0, local_port) and connect. local_port=0 lets the
+def open_connection(family, local_port, ip, port):
+    """Bind to local_port and connect to (ip, port). local_port=0 lets the
     kernel pick a free ephemeral port."""
-    s = make_socket()
-    s.bind(("0.0.0.0", local_port))
-    s.connect((host, port))
+    bind_addr = "0.0.0.0" if family == socket.AF_INET else "::"
+    s = make_socket(family)
+    s.bind((bind_addr, local_port))
+    s.connect((ip, port))
     return s
 
 
@@ -105,9 +112,9 @@ def http_query(sock, host):
     return json.loads(buf[sep + 4:].decode("utf-8", errors="replace").strip())
 
 
-def local_outbound_ip(remote_ip):
+def local_outbound_ip(remote_ip, family):
     """Discover the local IP the kernel would use to reach remote_ip."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s = socket.socket(family, socket.SOCK_DGRAM)
     try:
         s.connect((remote_ip, 9))
         return s.getsockname()[0]
@@ -115,43 +122,52 @@ def local_outbound_ip(remote_ip):
         s.close()
 
 
-# --- main -------------------------------------------------------------
+# --- resolution -------------------------------------------------------
 
 def parse_targets(urls):
     targets = []
     for url in urls:
         p = urlparse(url)
         if p.scheme != "http" or not p.hostname or not p.port:
-            raise SystemExit(f"bad URL: {url} (need scheme://host:port)")
+            raise SystemExit(f"bad URL: {url} (need http://host:port)")
         targets.append((p.hostname, p.port))
     return targets
 
 
-def main(argv):
-    if len(argv) != 5:
-        print(__doc__.strip(), file=sys.stderr)
-        return 2
+def resolve_targets(targets):
+    """Resolve targets for each address family.
+    Returns {family: [(host, port, ip), ...]} for families where all targets resolve."""
+    result = {}
+    for family in (socket.AF_INET, socket.AF_INET6):
+        resolved = []
+        for host, port in targets:
+            try:
+                infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+                if infos:
+                    ip = infos[0][4][0]
+                    resolved.append((host, port, ip))
+            except socket.gaierror:
+                break
+        if len(resolved) == len(targets):
+            result[family] = resolved
+    return result
 
-    targets = parse_targets(argv[1:5])
 
-    # Resolve hostnames once so we can group by destination IP later.
-    resolved = []
-    for host, port in targets:
-        try:
-            ip = socket.gethostbyname(host)
-        except socket.gaierror as e:
-            print(f"DNS failure for {host}: {e}", file=sys.stderr)
-            return 1
-        resolved.append((host, port, ip))
+# --- check logic ------------------------------------------------------
 
-    print(BOLD("nat-check") + DIM("  TCP NAT mapping classifier"))
+def run_check(resolved, family):
+    """Run the NAT classification for one address family. Returns 0 on success."""
+    family_label = "IPv4" if family == socket.AF_INET else "IPv6"
+    print(BOLD(f"── {family_label} ──"))
     print()
 
     # 1. Open the first connection with a kernel-chosen ephemeral port.
+    host0, port0, ip0 = resolved[0]
     try:
-        s0 = open_connection(0, resolved[0][0], resolved[0][1])
+        s0 = open_connection(family, 0, ip0, port0)
     except OSError as e:
-        print(RED(f"connect to {resolved[0][0]}:{resolved[0][1]} failed: {e}"))
+        print(RED(f"connect to {host0}:{port0} failed: {e}"))
+        print()
         return 1
     local_port = s0.getsockname()[1]
     sockets = [s0]
@@ -159,13 +175,14 @@ def main(argv):
     # 2. Open the remaining three on the SAME local port. Different
     #    destination 4-tuples keep this legal under SO_REUSEPORT.
     rebound = False
-    for host, port, _ip in resolved[1:]:
+    for host, port, ip in resolved[1:]:
         try:
-            s = open_connection(local_port, host, port)
+            s = open_connection(family, local_port, ip, port)
         except OSError as e:
             print(RED(f"connect to {host}:{port} from local port {local_port} failed: {e}"))
             for x in sockets:
                 x.close()
+            print()
             return 1
         actual = s.getsockname()[1]
         if actual != local_port:
@@ -188,6 +205,7 @@ def main(argv):
             print(RED(f"query {host}:{port} failed: {e}"))
             for x in sockets:
                 x.close()
+            print()
             return 1
         finally:
             sock.close()
@@ -216,7 +234,7 @@ def main(argv):
 
     # 6. Classify.
     try:
-        my_local_ip = local_outbound_ip(observations[0]["dst_ip"])
+        my_local_ip = local_outbound_ip(observations[0]["dst_ip"], family)
     except OSError:
         my_local_ip = None
 
@@ -234,8 +252,9 @@ def main(argv):
         color = GREEN
         detail = (
             f"External address ({_mask_ip(my_local_ip)}:{local_port}) equals the local address. "
-            "Your host is directly reachable; hole punching is unnecessary. Just listen "
-            "on the Bitcoin P2P port and ensure your firewall accepts inbound TCP."
+            "There is no NAT; hole punching is unnecessary. However, your home router "
+            "may still have a stateful firewall that blocks unsolicited inbound "
+            "connections. You may need to open the port on your router to be reachable."
         )
     elif len(unique_ports) == 1:
         label = "ENDPOINT-INDEPENDENT MAPPING (EIM)"
@@ -278,6 +297,33 @@ def main(argv):
         print("  " + line)
     print()
     return 0
+
+
+# --- main -------------------------------------------------------------
+
+def main(argv):
+    if len(argv) != 5:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+
+    targets = parse_targets(argv[1:5])
+    families = resolve_targets(targets)
+
+    if not families:
+        print(RED("error: could not resolve all targets for any address family"),
+              file=sys.stderr)
+        return 1
+
+    print(BOLD("nat-check") + DIM("  TCP NAT mapping classifier"))
+    print()
+
+    ret = 0
+    for family, resolved in families.items():
+        result = run_check(resolved, family)
+        if result != 0:
+            ret = result
+
+    return ret
 
 
 if __name__ == "__main__":

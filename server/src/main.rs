@@ -9,14 +9,15 @@
 //! the receive buffer cleanly before responding.
 //!
 //! Usage:
-//!     nat-check-server                # binds 0.0.0.0:7770 and 0.0.0.0:7771
+//!     nat-check-server                # binds 0.0.0.0+[::]:7770 and 0.0.0.0+[::]:7771
 //!     nat-check-server 8080 8081      # custom ports
 //!
 //! Response body (Content-Type: application/json):
 //!     {"observed_ip":"1.2.3.4","observed_port":54321,"server_port":7770}
 
+use socket2::{Domain, Protocol, Socket, Type};
 use std::env;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -28,26 +29,46 @@ async fn main() {
 
     eprintln!("[nat-check-server] starting on :{port_a} and :{port_b}");
 
-    let a = tokio::spawn(serve(port_a));
-    let b = tokio::spawn(serve(port_b));
-    let _ = tokio::join!(a, b);
+    let a4 = tokio::spawn(serve(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port_a))));
+    let b4 = tokio::spawn(serve(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port_b))));
+    let a6 = tokio::spawn(serve(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port_a))));
+    let b6 = tokio::spawn(serve(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port_b))));
+    let _ = tokio::join!(a4, b4, a6, b6);
 }
 
-async fn serve(port: u16) {
-    let listener = match TcpListener::bind(("0.0.0.0", port)).await {
+fn bind_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.bind(&addr.into())?;
+    socket.listen(128)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
+}
+
+async fn serve(addr: SocketAddr) {
+    let std_listener = match bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[nat-check-server] bind :{port} failed: {e}");
+            eprintln!("[nat-check-server] bind {addr} failed: {e}");
             return;
         }
     };
-    eprintln!("[nat-check-server] listening on 0.0.0.0:{port}");
+    let listener = TcpListener::from_std(std_listener).expect("tokio listener from std");
+    eprintln!("[nat-check-server] listening on {addr}");
     loop {
         match listener.accept().await {
             Ok((sock, peer)) => {
-                tokio::spawn(handle(sock, peer, port));
+                tokio::spawn(handle(sock, peer, addr.port()));
             }
-            Err(e) => eprintln!("[nat-check-server] accept :{port}: {e}"),
+            Err(e) => eprintln!("[nat-check-server] accept {addr}: {e}"),
         }
     }
 }

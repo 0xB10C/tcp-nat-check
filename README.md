@@ -73,7 +73,12 @@ NAT_CHECK_SHOW_IPS=1 python3 nat_check.py ...
   `(dst_ip, dst_port)` → hole punching fails for the same reason as ADM.
   Typical of CGNAT, mobile carriers, and restrictive enterprise networks.
 - **no NAT** — external address equals local address → hole punching
-  unnecessary; just listen normally.
+  unnecessary, but a stateful firewall (common on home routers, especially
+  for IPv6) may still block unsolicited inbound connections.
+
+The script checks IPv4 by default, and also checks IPv6 automatically if
+all four targets have AAAA records. Results are printed separately per
+address family.
 
 If the script prints a `kernel rebound port` warning, `SO_REUSEPORT` was
 not honored (older Linux, Windows, sandboxed environments). The result
