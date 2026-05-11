@@ -24,9 +24,11 @@ Example:
         http://hostb.example.com:7770 \\
         http://hostb.example.com:7771
 
+IP addresses are masked by default. Set NAT_CHECK_SHOW_IPS=1 to reveal them.
 """
 
 import json
+import os
 import socket
 import sys
 import textwrap
@@ -43,6 +45,23 @@ RED    = lambda s: _c("31", s)
 YELLOW = lambda s: _c("33", s)
 DIM    = lambda s: _c("2",  s)
 BOLD   = lambda s: _c("1",  s)
+
+
+# --- IP masking -------------------------------------------------------
+
+SHOW_IPS = os.environ.get("NAT_CHECK_SHOW_IPS", "0") in ("1", "true", "yes")
+
+def _mask_ip(ip):
+    """Replace an IP with a stable placeholder unless SHOW_IPS is set."""
+    if SHOW_IPS:
+        return ip
+    if not hasattr(_mask_ip, "_cache"):
+        _mask_ip._cache = {}
+        _mask_ip._counter = 0
+    if ip not in _mask_ip._cache:
+        _mask_ip._counter += 1
+        _mask_ip._cache[ip] = f"x.x.x.{_mask_ip._counter}"
+    return _mask_ip._cache[ip]
 
 
 # --- socket plumbing --------------------------------------------------
@@ -183,15 +202,15 @@ def main(argv):
     print(DIM(f"  {'destination':<38} {'external addr':<26}"))
     print(DIM("  " + "─" * 64))
     for o in observations:
-        dst = f"{o['host']}:{o['port']} ({o['dst_ip']})"
-        ext = f"{o['ext_ip']}:{o['ext_port']}"
+        dst = f"{o['host']}:{o['port']} ({_mask_ip(o['dst_ip'])})"
+        ext = f"{_mask_ip(o['ext_ip'])}:{o['ext_port']}"
         print(f"  {dst:<38} {ext:<26}")
     print()
 
     # 5. Sanity: external IP should be consistent across check-servers.
     ext_ips = {o["ext_ip"] for o in observations}
     if len(ext_ips) > 1:
-        print(YELLOW(f"warning: external IP varies across servers: {sorted(ext_ips)}"))
+        print(YELLOW(f"warning: external IP varies across servers: {sorted(_mask_ip(ip) for ip in ext_ips)}"))
         print(YELLOW("         multi-homed NAT or asymmetric routing."))
         print()
 
@@ -214,7 +233,7 @@ def main(argv):
         label = "NO NAT"
         color = GREEN
         detail = (
-            f"External address ({my_local_ip}:{local_port}) equals the local address. "
+            f"External address ({_mask_ip(my_local_ip)}:{local_port}) equals the local address. "
             "Your host is directly reachable; hole punching is unnecessary. Just listen "
             "on the Bitcoin P2P port and ensure your firewall accepts inbound TCP."
         )

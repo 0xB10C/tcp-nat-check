@@ -42,15 +42,22 @@ the external (post-NAT) address each server saw, and a classification:
  
 ```
 local source port: 51234
- 
+
   destination                            external addr
   ────────────────────────────────────────────────────────────────
-  hosta.example.com:7770 (1.2.3.4)       5.6.7.8:51234
-  hosta.example.com:7771 (1.2.3.4)       5.6.7.8:51234
-  hostb.example.com:7770 (9.10.11.12)    5.6.7.8:51234
-  hostb.example.com:7771 (9.10.11.12)    5.6.7.8:51234
- 
+  hosta.example.com:7770 (x.x.x.1)      x.x.x.3:51234
+  hosta.example.com:7771 (x.x.x.1)      x.x.x.3:51234
+  hostb.example.com:7770 (x.x.x.2)      x.x.x.3:51234
+  hostb.example.com:7771 (x.x.x.2)      x.x.x.3:51234
+
 classification: ENDPOINT-INDEPENDENT MAPPING (EIM)
+```
+
+IP addresses are masked by default so output is safe to share publicly.
+To show real IPs, set `NAT_CHECK_SHOW_IPS=1`:
+
+```bash
+NAT_CHECK_SHOW_IPS=1 python3 nat_check.py ...
 ```
  
 ## Classification meanings
