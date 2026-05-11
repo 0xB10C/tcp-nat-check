@@ -6,10 +6,10 @@ Opens four TCP connections from the *same* local source port to four
 (host, port) endpoints, asks each server what external (IP, port) it
 observed, and classifies the NAT mapping behavior per RFC 4787:
 
-    EIM    endpoint-independent          same external port everywhere
-    ADM    address-dependent             same per dst IP, varies across IPs
-    APDM   address+port-dependent        varies per (dst IP, dst port)  ("symmetric")
-    none   no NAT                        external addr == local addr
+    EIM    endpoint-independent          same external port everywhere; hole punching works
+    ADM    address-dependent             same per dst IP, varies across IPs; hole punching fails
+    APDM   address+port-dependent        varies per (dst IP, dst port); hole punching fails
+    none   no NAT                        external addr == local addr; hole punching unnecessary
 
 Pair with the matching nat-check-server Rust server running on two distinct
 public hosts, on two ports each.
@@ -121,7 +121,7 @@ def parse_targets(urls):
     targets = []
     for url in urls:
         p = urlparse(url)
-        if p.scheme not in ("http", "https") or not p.hostname or not p.port:
+        if p.scheme != "http" or not p.hostname or not p.port:
             raise SystemExit(f"bad URL: {url} (need scheme://host:port)")
         targets.append((p.hostname, p.port))
     return targets
