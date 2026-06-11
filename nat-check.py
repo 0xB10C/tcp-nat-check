@@ -29,6 +29,7 @@ IP addresses are masked by default. Set NAT_CHECK_SHOW_IPS=1 to reveal them.
 Checks IPv4 by default, and also checks IPv6 if all targets have AAAA records.
 """
 
+import ipaddress
 import json
 import os
 import socket
@@ -134,23 +135,52 @@ def parse_targets(urls):
     return targets
 
 
+def _is_v4_mapped(ip):
+    """True for IPv4-mapped IPv6 addresses like ::ffff:1.2.3.4."""
+    try:
+        return ipaddress.IPv6Address(ip).ipv4_mapped is not None
+    except (ipaddress.AddressValueError, ValueError):
+        return False
+
+
 def resolve_targets(targets):
     """Resolve targets for each address family.
-    Returns {family: [(host, port, ip), ...]} for families where all targets resolve."""
+
+    Returns ({family: [(host, port, ip), ...]}, [warnings]) for families where
+    all targets resolve.
+
+    IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) are skipped when resolving
+    AF_INET6: macOS's getaddrinfo can return these alongside (or instead of)
+    real AAAA results, and connecting to one falls back to IPv4 transport at
+    the kernel level — the IPv6 socket actually sends v4 packets, so the
+    server replies from its v4 listener and the classifier reports
+    misleading 'IPv6' numbers."""
     result = {}
+    warnings = []
     for family in (socket.AF_INET, socket.AF_INET6):
         resolved = []
         for host, port in targets:
             try:
                 infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
-                if infos:
-                    ip = infos[0][4][0]
-                    resolved.append((host, port, ip))
             except socket.gaierror:
                 break
+            ip = None
+            for info in infos:
+                candidate = info[4][0]
+                if family == socket.AF_INET6 and _is_v4_mapped(candidate):
+                    warnings.append(
+                        f"{host}: getaddrinfo returned IPv4-mapped address "
+                        f"{candidate}; skipping (would silently use IPv4 transport)"
+                    )
+                    continue
+                ip = candidate
+                break
+            if ip is None:
+                break
+            resolved.append((host, port, ip))
         if len(resolved) == len(targets):
             result[family] = resolved
-    return result
+    return result, warnings
 
 
 # --- check logic ------------------------------------------------------
@@ -307,7 +337,10 @@ def main(argv):
         return 2
 
     targets = parse_targets(argv[1:5])
-    families = resolve_targets(targets)
+    families, warnings = resolve_targets(targets)
+
+    for w in warnings:
+        print(YELLOW(f"warning: {w}"), file=sys.stderr)
 
     if not families:
         print(RED("error: could not resolve all targets for any address family"),
